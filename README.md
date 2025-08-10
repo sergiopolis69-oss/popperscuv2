@@ -1,1 +1,0 @@
-# popperscuv2\n\nProyecto Flutter de ventas e inventario (MVP).\n
