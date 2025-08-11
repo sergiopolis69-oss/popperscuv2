@@ -1,7 +1,7 @@
 name: popperscuv2
-description: Base app inventario/ventas/clientes (offline) sin impuestos ni nube.
+description: Base app inventario/ventas/clientes (offline) con utilidad, top clientes.
 publish_to: "none"
-version: 0.2.0+2
+version: 0.3.0+3
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -17,6 +17,8 @@ dependencies:
   flutter_riverpod: any
   uuid: any
   file_picker: any
+  file_saver: any
+  share_plus: any
 
 dev_dependencies:
   flutter_test:
