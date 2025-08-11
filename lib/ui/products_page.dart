@@ -23,27 +23,28 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
         child: const Icon(Icons.add),
       ),
       body: productsAsync.when(
-        data: (items) => ListView.builder(
-          itemCount: items.length,
-          itemBuilder: (c, i) {
-            final p = items[i];
-            return ListTile(
-              title: Text(p.name),
-              subtitle: Text('SKU: \${p.sku ?? '-'}  |  Stock: \${p.stock}  |  Compra: \${p.cost.toStringAsFixed(2)}  |  Venta: \${p.price.toStringAsFixed(2)}')}'),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(icon: const Icon(Icons.edit), onPressed: () => _openForm(edit: p)),
-                  IconButton(icon: const Icon(Icons.delete), onPressed: () async {
-                    await ref.read(productRepoProvider).delete(p.id);
-                    ref.invalidate(productsProvider);
-setState((){});
-                  }),
-                ],
-              ),
-            );
-          },
-        ),
+        data: (items) {
+          return ListView.builder(
+            itemCount: items.length,
+            itemBuilder: (c, i) {
+              final p = items[i];
+              return ListTile(
+                title: Text(p.name),
+                subtitle: Text('SKU: ${p.sku ?? '-'}  |  Stock: ${p.stock}  |  Compra: ${p.cost.toStringAsFixed(2)}  |  Venta: ${p.price.toStringAsFixed(2)}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(icon: const Icon(Icons.edit), onPressed: () => _openForm(edit: p)),
+                    IconButton(icon: const Icon(Icons.delete), onPressed: () async {
+                      await ref.read(productRepoProvider).delete(p.id);
+                      ref.invalidate(productsProvider);
+                    }),
+                  ],
+                ),
+              );
+            },
+          );
+        },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, st) => Center(child: Text('Error: $e')),
       ),
@@ -103,7 +104,7 @@ setState((){});
               await repo.update(p);
             }
             if (mounted) Navigator.pop(c);
-            setState((){});
+            ref.invalidate(productsProvider);
           }, child: const Text('Guardar'))
         ],
       ),

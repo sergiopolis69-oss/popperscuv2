@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../models/customer.dart';
-import '../providers/providers.dart';
 import '../repositories/customer_repository.dart';
+import '../providers/providers.dart';
 
 class CustomersPage extends ConsumerStatefulWidget {
   const CustomersPage({super.key});
@@ -15,21 +15,21 @@ class CustomersPage extends ConsumerStatefulWidget {
 class _CustomersPageState extends ConsumerState<CustomersPage> {
   @override
   Widget build(BuildContext context) {
-    final customersAsync = ref.watch(customersProvider);
+    final async = ref.watch(customersProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Clientes')),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _openForm(),
         child: const Icon(Icons.add),
       ),
-      body: customersAsync.when(
+      body: async.when(
         data: (items) => ListView.builder(
           itemCount: items.length,
           itemBuilder: (c, i) {
             final p = items[i];
             return ListTile(
               title: Text(p.name),
-              subtitle: Text('${p.phone ?? '-'}  |  ${p.email ?? '-'}'),
+              subtitle: Text(p.phone ?? ''),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -37,7 +37,6 @@ class _CustomersPageState extends ConsumerState<CustomersPage> {
                   IconButton(icon: const Icon(Icons.delete), onPressed: () async {
                     await ref.read(customerRepoProvider).delete(p.id);
                     ref.invalidate(customersProvider);
-setState((){});
                   }),
                 ],
               ),
@@ -51,10 +50,10 @@ setState((){});
   }
 
   Future<void> _openForm({Customer? edit}) async {
-    final nameCtrl = TextEditingController(text: edit?.name ?? '');
-    final phoneCtrl = TextEditingController(text: edit?.phone ?? '');
-    final emailCtrl = TextEditingController(text: edit?.email ?? '');
-    final notesCtrl = TextEditingController(text: edit?.notes ?? '');
+    final name = TextEditingController(text: edit?.name ?? '');
+    final phone = TextEditingController(text: edit?.phone ?? '');
+    final email = TextEditingController(text: edit?.email ?? '');
+    final notes = TextEditingController(text: edit?.notes ?? '');
 
     await showDialog(
       context: context,
@@ -64,10 +63,10 @@ setState((){});
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Nombre')),
-              TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Teléfono')),
-              TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'Email')),
-              TextField(controller: notesCtrl, decoration: const InputDecoration(labelText: 'Notas')),
+              TextField(controller: name, decoration: const InputDecoration(labelText: 'Nombre')),
+              TextField(controller: phone, decoration: const InputDecoration(labelText: 'Teléfono')),
+              TextField(controller: email, decoration: const InputDecoration(labelText: 'Email')),
+              TextField(controller: notes, decoration: const InputDecoration(labelText: 'Notas')),
             ],
           ),
         ),
@@ -78,24 +77,24 @@ setState((){});
             if (edit == null) {
               await repo.create(Customer(
                 id: const Uuid().v4(),
-                name: nameCtrl.text.trim(),
-                phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
-                email: emailCtrl.text.trim().isEmpty ? null : emailCtrl.text.trim(),
-                notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+                name: name.text.trim(),
+                phone: phone.text.trim().isEmpty ? null : phone.text.trim(),
+                email: email.text.trim().isEmpty ? null : email.text.trim(),
+                notes: notes.text.trim().isEmpty ? null : notes.text.trim(),
               ));
             } else {
               await repo.update(Customer(
                 id: edit.id,
-                name: nameCtrl.text.trim(),
-                phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
-                email: emailCtrl.text.trim().isEmpty ? null : emailCtrl.text.trim(),
-                notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+                name: name.text.trim(),
+                phone: phone.text.trim().isEmpty ? null : phone.text.trim(),
+                email: email.text.trim().isEmpty ? null : email.text.trim(),
+                notes: notes.text.trim().isEmpty ? null : notes.text.trim(),
                 createdAt: edit.createdAt,
                 updatedAt: DateTime.now(),
               ));
             }
             if (mounted) Navigator.pop(c);
-            setState((){});
+            ref.invalidate(customersProvider);
           }, child: const Text('Guardar'))
         ],
       ),

@@ -95,10 +95,8 @@ class _TopCustomersPageState extends State<TopCustomersPage> {
     );
   }
 
-  // Devuelve (inicio, fin) del rango determinado por el periodo y la fecha ancla
   (DateTime, DateTime) _rangeFor(Period p, DateTime anchor) {
     if (p == Period.week) {
-      // Lunes a domingo
       final start = DateTime(anchor.year, anchor.month, anchor.day).subtract(Duration(days: anchor.weekday - 1));
       final end = start.add(const Duration(days: 6, hours: 23, minutes: 59, seconds: 59));
       return (start, end);

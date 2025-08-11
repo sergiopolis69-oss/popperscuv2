@@ -1,5 +1,4 @@
 import 'package:uuid/uuid.dart';
-import 'package:sqflite/sqflite.dart';
 import '../services/db.dart';
 import '../models/product.dart';
 
@@ -8,13 +7,14 @@ class ProductRepository {
 
   Future<List<Product>> all() async {
     final db = await AppDatabase().database;
-    final rows = await db.query('products', orderBy: 'name ASC');
+    final rows = await db.query('products', orderBy: 'created_at DESC');
     return rows.map((e) => Product.fromMap(e)).toList();
   }
 
-  Future<void> create(Product p) async {
+  Future<Product> create(Product p) async {
     final db = await AppDatabase().database;
     await db.insert('products', p.toMap());
+    return p;
   }
 
   Future<void> update(Product p) async {
@@ -25,9 +25,5 @@ class ProductRepository {
   Future<void> delete(String id) async {
     final db = await AppDatabase().database;
     await db.delete('products', where: 'id = ?', whereArgs: [id]);
-  }
-
-  Product newEmpty() {
-    return Product(id: _uuid.v4(), name: '', price: 0, stock: 0);
   }
 }

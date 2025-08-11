@@ -1,10 +1,10 @@
 name: popperscuv2
-description: Base app inventario/ventas/clientes (offline) con utilidad, top clientes.
+description: App base inventario/ventas/clientes (offline), utilidad por venta, CSV visibles.
 publish_to: "none"
 version: 0.3.0+3
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: ">=3.3.0 <4.0.0"
 
 dependencies:
   flutter:

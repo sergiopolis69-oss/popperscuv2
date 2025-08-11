@@ -20,31 +20,32 @@ class _ReportsPageState extends State<ReportsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Exportar'),
+            const Text('Exportar a Descargas'),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: [
               ElevatedButton(onPressed: () async {
-                final p = await CsvIO.exportTable('products'); setState(()=> status='Exportado: $p');
+                final p = await CsvIO.exportTableToDownloads('products'); setState(()=> status='Exportado a: $p');
               }, child: const Text('products.csv')),
               ElevatedButton(onPressed: () async {
-                final p = await CsvIO.exportTable('customers'); setState(()=> status='Exportado: $p');
+                final p = await CsvIO.exportTableToDownloads('customers'); setState(()=> status='Exportado a: $p');
               }, child: const Text('customers.csv')),
               ElevatedButton(onPressed: () async {
-                final p = await CsvIO.exportTable('sales'); setState(()=> status='Exportado: $p');
+                final p = await CsvIO.exportTableToDownloads('sales'); setState(()=> status='Exportado a: $p');
               }, child: const Text('sales.csv')),
             ]),
             const Divider(height: 32),
-            const Text('Importar'),
+            const Text('Exportar local (app docs)'),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: [
               ElevatedButton(onPressed: () async {
-                final n = await CsvIO.importProductsFromCsv();
-                setState(()=> status='Productos importados: $n');
-              }, child: const Text('Importar productos.csv')),
+                final p = await CsvIO.exportTableLocal('products'); setState(()=> status='Guardado local: $p');
+              }, child: const Text('products.csv')),
               ElevatedButton(onPressed: () async {
-                final n = await CsvIO.importCustomersFromCsv();
-                setState(()=> status='Clientes importados: $n');
-              }, child: const Text('Importar customers.csv')),
+                final p = await CsvIO.exportTableLocal('customers'); setState(()=> status='Guardado local: $p');
+              }, child: const Text('customers.csv')),
+              ElevatedButton(onPressed: () async {
+                final p = await CsvIO.exportTableLocal('sales'); setState(()=> status='Guardado local: $p');
+              }, child: const Text('sales.csv')),
             ]),
             const SizedBox(height: 16),
             if (status != null) Text(status!),
