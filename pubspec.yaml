@@ -1,21 +1,26 @@
-name: popperscuventas
-description: app de ventas simple
+name: popperscuv2
+description: Base app inventario/ventas/clientes (offline) sin impuestos ni nube.
 publish_to: "none"
-version: 1.0.0+1
+version: 0.2.0+2
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-
-  cupertino_icons: ^1.0.8
+  cupertino_icons: ^1.0.6
+  sqflite: any
+  path_provider: any
+  intl: any
+  csv: any
+  flutter_riverpod: any
+  uuid: any
+  file_picker: any
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true
