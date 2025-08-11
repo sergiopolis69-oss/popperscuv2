@@ -88,15 +88,24 @@ class _SalesHistoryPageState extends State<SalesHistoryPage> {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: SaleRepository().history(customerId: _customerId, from: _from, to: _to),
       builder: (c, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
         final rows = snap.data ?? [];
         if (rows.isEmpty) return const Center(child: Text('Sin resultados'));
         return ListView.builder(
           itemCount: rows.length,
           itemBuilder: (c, i) {
             final r = rows[i];
+            final total = (r['total'] ?? 0).toString();
+            final discount = (r['discount'] ?? 0).toString();
+            final pay = (r['payment_method'] ?? '').toString();
+            final profit = (r['profit'] ?? 0).toString();
+            final customerName = (r['customer_name'] ?? '(sin cliente)').toString();
+            final createdAt = (r['created_at'] ?? '').toString();
             return ListTile(
-              title: Text('Total: ${r['total']}  | Descuento: ${r['discount']}  | Pago: ${r['payment_method']}'),
-              subtitle: Text('${r['customer_name'] ?? '(sin cliente)'} — ${r['created_at']}'),
+              title: Text('Total: $total  | Descuento: $discount  | Pago: $pay  | Utilidad: $profit'),
+              subtitle: Text('$customerName — $createdAt'),
             );
           },
         );
