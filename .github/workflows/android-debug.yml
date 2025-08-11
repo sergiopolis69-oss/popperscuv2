@@ -1,0 +1,36 @@
+name: Android Debug APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - 'android/**'
+      - '.github/workflows/android-debug.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APP_DIR: '.'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+      - name: Flutter pub get
+        run: flutter pub get
+        working-directory: ${{ env.APP_DIR }}
+      - name: Build debug APK
+        run: flutter build apk --debug
+        working-directory: ${{ env.APP_DIR }}
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug.apk
+          path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
