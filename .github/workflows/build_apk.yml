@@ -9,17 +9,17 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: setup flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: stable
           cache: true
 
-      # Detecta dónde está tu pubspec.yaml (raíz o subcarpeta)
-      - name: Detect Flutter project dir
+      - name: detect flutter project dir
         id: detect
         run: |
           set -e
@@ -31,44 +31,40 @@ jobs:
           echo "PROJECT_DIR=$DIR" >> $GITHUB_ENV
           echo "Project dir: $DIR"
 
-      # Crea proyecto Android válido (shell)
-      - name: Create clean shell app
+      - name: create clean shell app
         run: |
           flutter create shell_app --org com.popperscuv2.popperscuv2 --platforms=android
-          echo "SHELL_DIR=shell_app" >> $GITHUB_ENV
 
-      # Copia tu código dentro del shell
-      - name: Copy sources into shell
+      - name: copy sources into shell
         run: |
-          rsync -a "$PROJECT_DIR/lib/" "$SHELL_DIR/lib/"
-          if [ -d "$PROJECT_DIR/assets" ]; then rsync -a "$PROJECT_DIR/assets/" "$SHELL_DIR/assets/"; fi
-          cp "$PROJECT_DIR/pubspec.yaml" "$SHELL_DIR/pubspec.yaml"
+          rsync -a "${PROJECT_DIR}/lib/" "shell_app/lib/"
+          if [ -d "${PROJECT_DIR}/assets" ]; then rsync -a "${PROJECT_DIR}/assets/" "shell_app/assets/"; fi
+          cp "${PROJECT_DIR}/pubspec.yaml" "shell_app/pubspec.yaml"
 
-      - name: Pub get
-        working-directory: ${{ env.SHELL_DIR }}
+      - name: flutter pub get
+        working-directory: shell_app
         run: flutter pub get
 
-      - name: Analyze (allow warnings)
-        working-directory: ${{ env.SHELL_DIR }}
+      - name: analyze (allow warnings)
+        working-directory: shell_app
         run: flutter analyze || true
 
-      - name: Build APK (verbose)
-        working-directory: ${{ env.SHELL_DIR }}
+      - name: build release apk (verbose)
+        working-directory: shell_app
         run: |
           set -o pipefail
           flutter build apk --release -v 2>&1 | tee build_verbose.log
 
-      - name: Upload build log on failure
+      - name: upload build log on failure
         if: failure()
-        working-directory: ${{ env.SHELL_DIR }}
         uses: actions/upload-artifact@v4
         with:
           name: build_verbose_log
-          path: build_verbose.log
+          path: shell_app/build_verbose.log
 
-      - name: Upload APK
+      - name: upload apk
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
-          path: ${{ env.SHELL_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          path: shell_app/build/app/outputs/flutter-apk/app-release.apk
