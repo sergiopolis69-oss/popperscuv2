@@ -4,6 +4,7 @@ import 'customers_page.dart';
 import 'sales_page.dart';
 import 'reports_page.dart';
 import 'sales_history_page.dart';
+import 'top_customers_page.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -15,7 +16,16 @@ class HomePage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+                    const SizedBox(height: 12),
           ElevatedButton.icon(
+            icon: const Icon(Icons.leaderboard),
+            label: const Text('Top clientes'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TopCustomersPage()),
+            ),
+          ),
+ElevatedButton.icon(
             icon: const Icon(Icons.inventory_2),
             label: const Text('Inventario'),
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductsPage())),
