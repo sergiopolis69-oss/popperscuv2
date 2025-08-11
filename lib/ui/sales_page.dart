@@ -21,11 +21,25 @@ class _SalesPageState extends State<SalesPage> {
   double _discount = 0;
   String _paymentMethod = 'Cash';
 
-  Future<List<Product>> _loadProducts() => ProductRepository().all();
-  Future<List<Customer>> _loadCustomers() => CustomerRepository().all();
+  late Future<List<Product>> _productsFuture;
+  late Future<List<Customer>> _customersFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _productsFuture = ProductRepository().all();
+    _customersFuture = CustomerRepository().all();
+  }
 
   double get _subtotal => _items.fold(0.0, (p, e) => p + e.subtotal);
+  double get _costTotal => _items.fold(0.0, (p, e) => p + (e.costAtSale * e.quantity));
   double get _total => (_subtotal - _discount).clamp(0, double.infinity);
+  double get _profit => _total - _costTotal;
+
+  String _nameFor(List<Product> list, String id) {
+    final f = list.where((e) => e.id == id);
+    return f.isEmpty ? id : f.first.name;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,20 +49,32 @@ class _SalesPageState extends State<SalesPage> {
         padding: const EdgeInsets.all(12),
         child: Column(
           children: [
-            FutureBuilder<List<Customer>>(
-              future: _loadCustomers(),
-              builder: (c, snap) {
-                final list = snap.data ?? [];
-                return DropdownButtonFormField<String>(
-                  value: _customerId,
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('Cliente: (no asignado)')),
-                    ...list.map((e) => DropdownMenuItem(value: e.id, child: Text(e.name)))
-                  ],
-                  onChanged: (v) => setState(() => _customerId = v),
-                  decoration: const InputDecoration(labelText: 'Cliente'),
-                );
-              },
+            Row(
+              children: [
+                Expanded(
+                  child: FutureBuilder<List<Customer>>(
+                    future: _customersFuture,
+                    builder: (c, snap) {
+                      final list = snap.data ?? [];
+                      return DropdownButtonFormField<String>(
+                        value: _customerId,
+                        items: [
+                          const DropdownMenuItem(value: null, child: Text('Cliente: (no asignado)')),
+                          ...list.map((e) => DropdownMenuItem(value: e.id, child: Text(e.name)))
+                        ],
+                        onChanged: (v) => setState(() => _customerId = v),
+                        decoration: const InputDecoration(labelText: 'Cliente'),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.person_add_alt_1),
+                  tooltip: 'Agregar cliente rápido',
+                  onPressed: _quickAddCustomer,
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Row(
@@ -80,7 +106,7 @@ class _SalesPageState extends State<SalesPage> {
             const Divider(height: 24),
             Expanded(
               child: FutureBuilder<List<Product>>(
-                future: _loadProducts(),
+                future: _productsFuture,
                 builder: (c, snap) {
                   final list = snap.data ?? [];
                   return ListView(
@@ -89,7 +115,7 @@ class _SalesPageState extends State<SalesPage> {
                       for (final p in list)
                         ListTile(
                           title: Text(p.name),
-                          subtitle: Text('Stock: ${p.stock}  |  ${p.price.toStringAsFixed(2)}'),
+                          subtitle: Text('Stock: ${p.stock}  | Compra: ${p.cost.toStringAsFixed(2)}  | Venta: ${p.price.toStringAsFixed(2)}'),
                           trailing: IconButton(
                             icon: const Icon(Icons.add_circle),
                             onPressed: () => _addItemDialog(p),
@@ -97,15 +123,15 @@ class _SalesPageState extends State<SalesPage> {
                         ),
                       const Divider(height: 24),
                       const Text('Carrito', style: TextStyle(fontWeight: FontWeight.bold)),
-                      for (int i=0; i<_items.length; i++)
+                      for (int i = 0; i < _items.length; i++)
                         ListTile(
-                          title: Text('x${_items[i].quantity} — ${_items[i].productId}'),
-                          subtitle: Text('Precio: ${_items[i].price.toStringAsFixed(2)}  | Desc. línea: ${_items[i].lineDiscount.toStringAsFixed(2)}  | Subtotal: ${_items[i].subtotal.toStringAsFixed(2)}'),
+                          title: Text('x${_items[i].quantity} — ${_nameFor(list, _items[i].productId)}'),
+                          subtitle: Text('Precio: ${_items[i].price.toStringAsFixed(2)}  | Costo: ${_items[i].costAtSale.toStringAsFixed(2)}  | Desc. línea: ${_items[i].lineDiscount.toStringAsFixed(2)}  | Subtotal: ${_items[i].subtotal.toStringAsFixed(2)}'),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(icon: const Icon(Icons.edit), onPressed: () => _editItemDialog(i)),
-                              IconButton(icon: const Icon(Icons.delete), onPressed: () => setState(()=> _items.removeAt(i))),
+                              IconButton(icon: const Icon(Icons.delete), onPressed: () => setState(() => _items.removeAt(i))),
                             ],
                           ),
                         ),
@@ -115,11 +141,14 @@ class _SalesPageState extends State<SalesPage> {
               ),
             ),
             const Divider(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text('Subtotal: ${_subtotal.toStringAsFixed(2)}'),
+                Text('Descuento total: ${_discount.toStringAsFixed(2)}'),
+                Text('Costo total: ${_costTotal.toStringAsFixed(2)}'),
                 Text('Total: ${_total.toStringAsFixed(2)}'),
+                Text('Utilidad: ${_profit.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 8),
@@ -130,6 +159,40 @@ class _SalesPageState extends State<SalesPage> {
             )
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _quickAddCustomer() async {
+    final name = TextEditingController();
+    final phone = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Nuevo cliente rápido'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: name, decoration: const InputDecoration(labelText: 'Nombre')),
+            TextField(controller: phone, decoration: const InputDecoration(labelText: 'Teléfono (opcional)')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancelar')),
+          ElevatedButton(onPressed: () async {
+            final repo = CustomerRepository();
+            final nc = await repo.create(Customer(
+              id: const Uuid().v4(),
+              name: name.text.trim(),
+              phone: phone.text.trim().isEmpty ? null : phone.text.trim(),
+            ));
+            setState(() {
+              _customersFuture = CustomerRepository().all();
+              _customerId = nc.id;
+            });
+            if (mounted) Navigator.pop(c);
+          }, child: const Text('Guardar')),
+        ],
       ),
     );
   }
@@ -160,6 +223,7 @@ class _SalesPageState extends State<SalesPage> {
                 productId: p.id,
                 quantity: q,
                 price: p.price,
+                costAtSale: p.cost,
                 lineDiscount: d,
               ));
             });
@@ -173,7 +237,9 @@ class _SalesPageState extends State<SalesPage> {
   Future<void> _editItemDialog(int index) async {
     final it = _items[index];
     final qty = TextEditingController(text: it.quantity.toString());
-    final disc = TextEditingController(text: it.lineDiscount.toString());
+    final price = TextEditingController(text: it.price.toString());
+    final cost  = TextEditingController(text: it.costAtSale.toString());
+    final disc  = TextEditingController(text: it.lineDiscount.toString());
     await showDialog(
       context: context,
       builder: (c) => AlertDialog(
@@ -182,13 +248,17 @@ class _SalesPageState extends State<SalesPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(controller: qty, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Cantidad')),
-            TextField(controller: disc, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Descuento por línea (monto)')),
+            TextField(controller: price, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Precio venta')),
+            TextField(controller: cost,  keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Costo')),
+            TextField(controller: disc,  keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Descuento por línea (monto)')),
           ],
         ),
         actions: [
           TextButton(onPressed: ()=> Navigator.pop(c), child: const Text('Cancelar')),
           ElevatedButton(onPressed: (){
             final q = int.tryParse(qty.text) ?? it.quantity;
+            final p = double.tryParse(price.text) ?? it.price;
+            final cst = double.tryParse(cost.text) ?? it.costAtSale;
             final d = double.tryParse(disc.text) ?? it.lineDiscount;
             setState((){
               _items[index] = SaleItem(
@@ -196,7 +266,8 @@ class _SalesPageState extends State<SalesPage> {
                 saleId: it.saleId,
                 productId: it.productId,
                 quantity: q,
-                price: it.price,
+                price: p,
+                costAtSale: cst,
                 lineDiscount: d,
               );
             });
