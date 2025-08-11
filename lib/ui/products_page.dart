@@ -29,14 +29,15 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
             final p = items[i];
             return ListTile(
               title: Text(p.name),
-              subtitle: Text('SKU: ${p.sku ?? '-'}  |  Stock: ${p.stock}  |  ${p.price.toStringAsFixed(2)}'),
+              subtitle: Text('SKU: \${p.sku ?? '-'}  |  Stock: \${p.stock}  |  Compra: \${p.cost.toStringAsFixed(2)}  |  Venta: \${p.price.toStringAsFixed(2)}')}'),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(icon: const Icon(Icons.edit), onPressed: () => _openForm(edit: p)),
                   IconButton(icon: const Icon(Icons.delete), onPressed: () async {
                     await ref.read(productRepoProvider).delete(p.id);
-                    setState((){});
+                    ref.invalidate(productsProvider);
+setState((){});
                   }),
                 ],
               ),
@@ -52,6 +53,7 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
   Future<void> _openForm({Product? edit}) async {
     final nameCtrl = TextEditingController(text: edit?.name ?? '');
     final skuCtrl = TextEditingController(text: edit?.sku ?? '');
+    final costCtrl = TextEditingController(text: edit?.cost.toString() ?? '0');
     final priceCtrl = TextEditingController(text: edit?.price.toString() ?? '0');
     final stockCtrl = TextEditingController(text: edit?.stock.toString() ?? '0');
     final categoryCtrl = TextEditingController(text: edit?.category ?? '');
@@ -66,7 +68,8 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
             children: [
               TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Nombre')),
               TextField(controller: skuCtrl, decoration: const InputDecoration(labelText: 'SKU')),
-              TextField(controller: priceCtrl, decoration: const InputDecoration(labelText: 'Precio'), keyboardType: TextInputType.number),
+              TextField(controller: costCtrl, decoration: const InputDecoration(labelText: 'Precio compra'), keyboardType: TextInputType.number),
+              TextField(controller: priceCtrl, decoration: const InputDecoration(labelText: 'Precio venta'), keyboardType: TextInputType.number),
               TextField(controller: stockCtrl, decoration: const InputDecoration(labelText: 'Stock'), keyboardType: TextInputType.number),
               TextField(controller: categoryCtrl, decoration: const InputDecoration(labelText: 'Categoría')),
             ],
@@ -81,6 +84,7 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
                 id: const Uuid().v4(),
                 name: nameCtrl.text.trim(),
                 sku: skuCtrl.text.trim().isEmpty ? null : skuCtrl.text.trim(),
+                cost: double.tryParse(costCtrl.text) ?? 0,
                 price: double.tryParse(priceCtrl.text) ?? 0,
                 stock: int.tryParse(stockCtrl.text) ?? 0,
                 category: categoryCtrl.text.trim().isEmpty ? null : categoryCtrl.text.trim(),
@@ -90,6 +94,7 @@ class _ProductsPageState extends ConsumerState<ProductsPage> {
               final p = edit.copyWith(
                 name: nameCtrl.text.trim(),
                 sku: skuCtrl.text.trim().isEmpty ? null : skuCtrl.text.trim(),
+                cost: double.tryParse(costCtrl.text) ?? edit.cost,
                 price: double.tryParse(priceCtrl.text) ?? edit.price,
                 stock: int.tryParse(stockCtrl.text) ?? edit.stock,
                 category: categoryCtrl.text.trim().isEmpty ? null : categoryCtrl.text.trim(),
