@@ -1,20 +1,18 @@
-name: Android Debug APK
+name: Android Debug APK (Auto-detect app dir)
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
     paths:
-      - 'lib/**'
+      - '**/*.dart'
       - 'pubspec.yaml'
-      - 'android/**'
+      - 'shell_app/**'
       - '.github/workflows/android-debug.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      APP_DIR: '.'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,21 +23,47 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Flutter version
-        run: flutter --version
+      - name: Detect Flutter app directory
+        id: detect_dir
+        shell: bash
+        run: |
+          set -e
+          APP_DIR="."
+          if [ -f "shell_app/pubspec.yaml" ]; then
+            APP_DIR="shell_app"
+          elif [ -f "app/pubspec.yaml" ]; then
+            APP_DIR="app"
+          elif [ -f "mobile/pubspec.yaml" ]; then
+            APP_DIR="mobile"
+          elif [ -f "client/pubspec.yaml" ]; then
+            APP_DIR="client"
+          elif [ -f "pubspec.yaml" ]; then
+            APP_DIR="."
+          else
+            echo "❌ No se encontró pubspec.yaml"; exit 1
+          fi
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
+          echo "Detected APP_DIR=$APP_DIR"
 
       - name: Regenerate Android project (Flutter 3.27+)
+        shell: bash
         run: |
-          rm -rf ${{ env.APP_DIR }}/android
-          flutter create --platforms=android ${{ env.APP_DIR }}
+          set -e
+          cd "$APP_DIR"
+          rm -rf android
+          flutter create --platforms=android .
 
       - name: Flutter pub get
-        run: flutter pub get
-        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          cd "$APP_DIR"
+          flutter pub get
 
       - name: Build debug APK
-        run: flutter build apk --debug
-        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          cd "$APP_DIR"
+          flutter build apk --debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
