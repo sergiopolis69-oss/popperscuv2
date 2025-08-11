@@ -1,4 +1,5 @@
 name: Android Debug APK
+
 on:
   workflow_dispatch:
   push:
@@ -17,17 +18,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Regenerate Android project (Flutter 3.27+)
+        run: |
+          rm -rf ${{ env.APP_DIR }}/android
+          flutter create --platforms=android ${{ env.APP_DIR }}
+
       - name: Flutter pub get
         run: flutter pub get
         working-directory: ${{ env.APP_DIR }}
+
       - name: Build debug APK
         run: flutter build apk --debug
         working-directory: ${{ env.APP_DIR }}
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
