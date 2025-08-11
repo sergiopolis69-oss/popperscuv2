@@ -36,7 +36,8 @@ class _CustomersPageState extends ConsumerState<CustomersPage> {
                   IconButton(icon: const Icon(Icons.edit), onPressed: () => _openForm(edit: p)),
                   IconButton(icon: const Icon(Icons.delete), onPressed: () async {
                     await ref.read(customerRepoProvider).delete(p.id);
-                    setState((){});
+                    ref.invalidate(customersProvider);
+setState((){});
                   }),
                 ],
               ),
