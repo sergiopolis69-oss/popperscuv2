@@ -1,5 +1,6 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
-import 'screens/home_screen.dart';
+import 'screens/products_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -8,16 +9,13 @@ void main() {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'popperscuv2',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
-      ),
-      home: const HomeScreen(),
+      title: 'inventario',
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: const Color(0xFF0A84FF)),
+      home: const ProductsScreen(),
+      debugShowCheckedModeBanner: false,
     );
   }
 }
