@@ -53,7 +53,7 @@ jobs:
           fi
           "$SDKMAN" --version
 
-      - name: Accept licenses & ensure at least one NDK 27.x
+      - name: Accept licenses & ensure NDK 27 available
         run: |
           set -e
           SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
@@ -82,6 +82,7 @@ jobs:
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
           touch "$LP"
+          # limpia claves previas y escribe valores correctos
           { grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
           mv "$LP.tmp" "$LP"
           echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
@@ -101,42 +102,6 @@ android.ndkVersion=${NDK_CAND}
 EOF
           echo "=== android/gradle.properties ==="
           cat "$APP_DIR/android/gradle.properties"
-
-      - name: Patch Gradle files to 27.x (project & app)
-        run: |
-          set -e
-          python3 - <<'PY'
-          import io, os, re
-          app_dir = os.environ.get('APP_DIR','.') or '.'
-          ndk = os.environ.get('NDK_CAND','27.0.12077973')
-
-          def patch_file(path):
-            if not os.path.isfile(path): return
-            with io.open(path,'r',encoding='utf-8') as f: s=f.read()
-            s2 = s
-            # android.ndkVersion=...
-            s2 = re.sub(r'(["\'])android\.ndkVersion\1\s*[:=]\s*(["\'])[0-9\.]+(["\'])',
-                        lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s2)
-            s2 = re.sub(r'extra\[\s*(["\'])android\.ndkVersion\1\s*\]\s*=\s*(["\'])[0-9\.]+(["\'])',
-                        lambda m: f'extra["android.ndkVersion"] = "{ndk}"', s2)
-            # ndkVersion "..."
-            s2 = re.sub(r'ndkVersion\s*=\s*"(?:\d|\.)+"', f'ndkVersion = "{ndk}"', s2)
-            s2 = re.sub(r"ndkVersion\s*'(?:\d|\.)+'",     f"ndkVersion '{ndk}'", s2)
-            # catálogos (opcional)
-            s2 = re.sub(r'(?im)^\s*ndk(?:Version)?\s*=\s*"(?:26\.[^"]+)"', f'ndkVersion = "{ndk}"', s2)
-            if s2 != s:
-              with io.open(path,'w',encoding='utf-8') as f: f.write(s2)
-              print(f"[patched] {path}")
-            else:
-              print(f"[ok] {path}")
-
-          for rel in [
-            'android/build.gradle.kts','android/build.gradle',
-            'android/app/build.gradle.kts','android/app/build.gradle',
-            'android/gradle/libs.versions.toml'
-          ]:
-            patch_file(os.path.join(app_dir, rel))
-          PY
 
       - name: Fresh Gradle home (isolate & clean)
         run: |
