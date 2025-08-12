@@ -1,4 +1,4 @@
-name: Android Debug APK (NDK27 clean + V2)
+name: Android Debug APK (regen + NDK27)
 
 on:
   workflow_dispatch:
@@ -6,12 +6,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 17 (AGP compatible)
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -30,20 +29,18 @@ jobs:
           for d in "." "shell_app" "app" "mobile" "client"; do
             if [ -f "$d/pubspec.yaml" ]; then APP_DIR="$d"; break; fi
           done
-          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
           echo "Detected APP_DIR=$APP_DIR"
 
       - name: Ensure Android cmdline-tools (sdkmanager)
         run: |
           set -e
           SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          echo "ANDROID_SDK_ROOT=$SDK"
           SDKMAN="$SDK/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMAN" ]; then
-            echo "Installing Android cmdline-tools (sdkmanager)..."
             mkdir -p "$SDK/cmdline-tools"
             cd "$SDK/cmdline-tools"
-            curl -sSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip
+            curl -sSLo cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
             unzip -q cmdline-tools.zip
             rm -f cmdline-tools.zip
             rm -rf latest
@@ -52,92 +49,57 @@ jobs:
           fi
           "$SDKMAN" --version
 
-      - name: Accept licenses & ensure NDK 27 available
+      # 1) Regenera 'android/' con embedding v2 (soluciona el error de v1)
+      - name: Regenerate Android project (v2 embedding)
+        run: |
+          set -e
+          cd "$APP_DIR"
+          rm -rf android
+          flutter create --platforms=android .
+
+      # 2) Instala/asegura NDK 27 y sincroniza todo a 27.x
+      - name: Install & resolve NDK 27.x
         run: |
           set -e
           SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMAN" --licenses >/dev/null
           yes | "$SDKMAN" --install "ndk;27.0.12077973" || true
-          echo "Installed NDKs:"
-          ls -la "$ANDROID_SDK_ROOT/ndk" || true
-
-      - name: Resolve NDK 27.x and write local.properties
-        run: |
-          set -e
-          APP_DIR="${APP_DIR:-.}"
           NDK_ROOT="$ANDROID_SDK_ROOT/ndk"
           CAND=$(ls -1 "$NDK_ROOT" 2>/dev/null | grep '^27' | sort -V | tail -n1 || true)
           if [ -z "$CAND" ] || [ ! -f "$NDK_ROOT/$CAND/source.properties" ]; then
             CAND="27.0.12077973"
           fi
+          echo "NDK_CAND=$CAND" >> $GITHUB_ENV
           echo "Using NDK: $NDK_ROOT/$CAND"
-          echo "NDK_CAND=$CAND" >> "$GITHUB_ENV"
 
+      - name: Write local.properties and gradle.properties
+        run: |
+          set -e
+          APP_DIR="${APP_DIR:-.}"
+          NDK_DIR="$ANDROID_SDK_ROOT/ndk/${NDK_CAND}"
+          # local.properties
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
-          touch "$LP"
-          { grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
-          mv "$LP.tmp" "$LP" 2>/dev/null || true
-          echo "ndk.dir=$NDK_ROOT/$CAND" >> "$LP"
-          echo "flutter.ndkVersion=$CAND" >> "$LP"
-          echo "--- local.properties ---"
-          cat "$LP"
-
-      - name: Reset android/gradle.properties (clean & synced)
-        run: |
-          set -e
-          APP_DIR="${APP_DIR:-.}"
+          : > "$LP"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> "$LP"
+          echo "flutter.sdk=$(which flutter | xargs dirname | xargs dirname)" >> "$LP"
+          echo "ndk.dir=$NDK_DIR" >> "$LP"
+          echo "flutter.ndkVersion=${NDK_CAND}" >> "$LP"
+          echo "--- local.properties ---"; cat "$LP"
+          # gradle.properties del proyecto
           GP="$APP_DIR/android/gradle.properties"
-          mkdir -p "$APP_DIR/android"
-          {
-            echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8"
-            echo "android.useAndroidX=true"
-            echo "android.enableJetifier=true"
-            echo "android.ndkVersion=${NDK_CAND}"
-          } > "$GP"
-          echo "=== android/gradle.properties ==="
-          cat "$GP"
-
-      - name: Fresh Gradle home (isolate & clean)
-        run: |
-          set -e
+          : > "$GP"
+          echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8" >> "$GP"
+          echo "android.useAndroidX=true" >> "$GP"
+          echo "android.enableJetifier=true" >> "$GP"
+          echo "android.ndkVersion=${NDK_CAND}" >> "$GP"
+          echo "--- android/gradle.properties ---"; cat "$GP"
+          # Gradle home limpio
           GH="$RUNNER_TEMP/.gradle"
           mkdir -p "$GH"
-          echo "GRADLE_USER_HOME=$GH" >> "$GITHUB_ENV"
-          unset GRADLE_OPTS
-          echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8" > "$GH/gradle.properties"
-          echo "=== $GH/gradle.properties ==="
-          cat "$GH/gradle.properties"
-
-      - name: Migrate to Android embedding v2 (best effort)
-        run: |
-          set -e
-          APP_DIR="${APP_DIR:-.}"
-          BASE="$APP_DIR/android/app/src/main"
-          # Kotlin files
-          if [ -d "$BASE/kotlin" ]; then
-            FILES=$(grep -Rls --include='*.kt' 'io.flutter.app.FlutterActivity' "$BASE/kotlin" || true)
-            for F in $FILES; do
-              echo "Patching $F"
-              sed -i 's#io\.flutter\.app\.FlutterActivity#io.flutter.embedding.android.FlutterActivity#g' "$F"
-              sed -i '/GeneratedPluginRegistrant/d' "$F"
-            done
-          fi
-          # Java files
-          if [ -d "$BASE/java" ]; then
-            FILES=$(grep -Rls --include='*.java' 'io.flutter.app.FlutterActivity' "$BASE/java" || true)
-            for F in $FILES; do
-              echo "Patching $F"
-              sed -i 's#io\.flutter\.app\.FlutterActivity#io.flutter.embedding.android.FlutterActivity#g' "$F"
-              sed -i '/GeneratedPluginRegistrant/d' "$F"
-            done
-          fi
-          # Manifest meta-data
-          MAN="$BASE/AndroidManifest.xml"
-          if [ -f "$MAN" ] && ! grep -q 'flutterEmbedding' "$MAN"; then
-            sed -i 's#</application>#    <meta-data android:name="flutterEmbedding" android:value="2"/>\n</application>#' "$MAN"
-            echo "Injected flutterEmbedding=2 into AndroidManifest.xml"
-          fi
+          echo "GRADLE_USER_HOME=$GH" >> $GITHUB_ENV
+          : > "$GH/gradle.properties"
+          echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8" >> "$GH/gradle.properties"
 
       - name: Flutter pub get
         run: |
