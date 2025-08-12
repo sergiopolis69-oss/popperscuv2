@@ -1,4 +1,4 @@
-name: Android Debug APK (NDK27 repo-wide sync)
+name: Android Debug APK (fix v1 + NDK27)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,7 +23,6 @@ jobs:
           cache: true
 
       - name: Detect Flutter app directory
-        id: detect_dir
         run: |
           set -e
           APP_DIR="."
@@ -57,70 +55,41 @@ jobs:
           SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMAN" --licenses >/dev/null
           yes | "$SDKMAN" --install "ndk;27.0.12077973" || true
-          echo "Installed NDKs:"
           ls -la "$ANDROID_SDK_ROOT/ndk" || true
 
-      - name: Resolve NDK 27.x (detect installed)
-        id: ndk
+      - name: Resolve NDK 27.x and write properties
         run: |
           set -e
+          APP_DIR="${APP_DIR:-.}"
           NDK_ROOT="$ANDROID_SDK_ROOT/ndk"
           CAND=$(ls -1 "$NDK_ROOT" 2>/dev/null | grep '^27' | sort -V | tail -n1 || true)
           if [ -z "$CAND" ] || [ ! -f "$NDK_ROOT/$CAND/source.properties" ]; then
             CAND="27.0.12077973"
           fi
           echo "NDK_CAND=$CAND" >> "$GITHUB_ENV"
-          echo "Using NDK: $NDK_ROOT/$CAND"
 
-      - name: Write local.properties (ndk.dir + flutter.ndkVersion)
-        run: |
-          set -e
-          APP_DIR="${APP_DIR:-.}"
+          # local.properties
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
           {
             echo "sdk.dir=$ANDROID_SDK_ROOT"
-            echo "flutter.sdk=$(dirname $(dirname $(which flutter)))"
-            echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/${NDK_CAND}"
-            echo "flutter.ndkVersion=${NDK_CAND}"
+            echo "flutter.sdk=$(dirname "$(dirname "$(which flutter)")")"
+            echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/$CAND"
+            echo "flutter.ndkVersion=$CAND"
           } > "$LP"
-          echo "--- local.properties ---"
-          cat "$LP"
+          echo "--- local.properties ---"; cat "$LP"
 
-      - name: Repo-wide normalize gradle.properties to NDK 27.x
-        run: |
-          set -e
-          APP_DIR="${APP_DIR:-.}"
-          # Reescribe android/gradle.properties limpio
+          # android/gradle.properties
+          GP="$APP_DIR/android/gradle.properties"
           {
             echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8"
             echo "android.useAndroidX=true"
             echo "android.enableJetifier=true"
-            echo "android.ndkVersion=${NDK_CAND}"
-          } > "$APP_DIR/android/gradle.properties"
-          # Busca *todos* los gradle.properties del repo y normaliza android.ndkVersion
-          mapfile -t GPS < <(find "$GITHUB_WORKSPACE" -type f -name "gradle.properties")
-          for GP in "${GPS[@]}"; do
-            if [ -f "$GP" ]; then
-              echo "[patch] $GP"
-              # quita líneas duplicadas y fija android.ndkVersion
-              awk -v ndk="${NDK_CAND}" '
-                BEGIN{seen=0}
-                !/^android\.ndkVersion=/ {print; next}
-                /^android\.ndkVersion=/ && !seen {print "android.ndkVersion=" ndk; seen=1; next}
-              ' "$GP" | awk 'BEGIN{seen=0} {if($0 !~ /^android\.ndkVersion=/) print $0; else if(!seen){print $0; seen=1}}' > "$GP.tmp"
-              # Asegura la línea si no estaba
-              if ! grep -q '^android\.ndkVersion=' "$GP.tmp"; then
-                echo "android.ndkVersion=${NDK_CAND}" >> "$GP.tmp"
-              fi
-              mv "$GP.tmp" "$GP"
-              echo "android.ndkVersion=$(grep -m1 '^android.ndkVersion=' "$GP" | cut -d= -f2)"
-            fi
-          done
-          echo ">>> grep android.ndkVersion (repo):"
-          grep -Rns --include='gradle.properties' '^android\.ndkVersion=' "$GITHUB_WORKSPACE" || true
+            echo "android.ndkVersion=$CAND"
+          } > "$GP"
+          echo "--- android/gradle.properties ---"; cat "$GP"
 
-      - name: Fresh Gradle home (isolate & clean)
+      - name: Fresh Gradle home (clean)
         run: |
           set -e
           GH="$RUNNER_TEMP/.gradle"
@@ -128,8 +97,32 @@ jobs:
           echo "GRADLE_USER_HOME=$GH" >> "$GITHUB_ENV"
           unset GRADLE_OPTS
           echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8" > "$GH/gradle.properties"
-          echo "=== $GH/gradle.properties ==="
-          cat "$GH/gradle.properties"
+          echo "=== $GH/gradle.properties ==="; cat "$GH/gradle.properties"
+
+      - name: Migrate ALL android/ sources to embedding v2
+        run: |
+          set -e
+          APP_DIR="${APP_DIR:-.}"
+          ANDROID_DIR="$APP_DIR/android"
+          # 1) Reemplaza imports antiguos en .kt/.java
+          find "$ANDROID_DIR" -type f \( -name "*.kt" -o -name "*.java" \) -print0 | xargs -0 -r sed -i \
+            -e 's#io\.flutter\.app\.FlutterActivity#io.flutter.embedding.android.FlutterActivity#g' \
+            -e 's#io\.flutter\.app\.FlutterApplication#android.app.Application#g' \
+            -e '/GeneratedPluginRegistrant/d' \
+            -e '/registerWith/d' \
+            -e '/PluginRegistry/d'
+          # 2) Limpia AndroidManifest.xml: quita FlutterApplication v1 y añade meta-data v2
+          find "$ANDROID_DIR/app/src" -type f -name "AndroidManifest.xml" -print0 | while IFS= read -r -d '' MAN; do
+            sed -i 's#android:name="io.flutter.app.FlutterApplication"##g' "$MAN" || true
+            if ! grep -q 'flutterEmbedding' "$MAN"; then
+              # Inserta meta-data antes de </application>
+              awk '1;/<\/application>/{print "    <meta-data android:name=\"flutterEmbedding\" android:value=\"2\"/>"}' "$MAN" > "$MAN.tmp" && mv "$MAN.tmp" "$MAN"
+            fi
+          done
+          echo "=== Leftovers v1 (if any) ==="
+          grep -Rns --include='*.kt' --include='*.java' --include='*.xml' \
+            -e 'io.flutter.app.FlutterActivity' -e 'FlutterApplication' \
+            -e 'GeneratedPluginRegistrant' -e 'registerWith' -e 'PluginRegistry' "$ANDROID_DIR" || true
 
       - name: Flutter pub get
         run: |
