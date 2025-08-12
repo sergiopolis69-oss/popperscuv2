@@ -39,6 +39,7 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "Detected APP_DIR=$APP_DIR"
 
+      # sdkmanager puede no existir: instalamos cmdline-tools
       - name: Ensure Android cmdline-tools (sdkmanager)
         run: |
           set -e
@@ -95,11 +96,19 @@ jobs:
           { grep -v '^ndk\.dir=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
           mv "$LP.tmp" "$LP" 2>/dev/null || true
           echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
+          echo "--- local.properties ---"
           cat "$LP"
-          # fuerza propiedad Gradle via env (override garantizado)
+          # env override (redundante pero seguro)
           echo "ORG_GRADLE_PROJECT_android_ndkVersion=$CANDIDATE" >> "$GITHUB_ENV"
 
-      - name: Sync files to ${NDK_CAND}
+      - name: Debug current NDK mentions (before patch)
+        run: |
+          set -e
+          cd "$APP_DIR/android"
+          echo ">>> Grep ndkVersion / android.ndkVersion (before)"
+          (grep -Rns --include='*.gradle*' --include='*.kts' --include='*.toml' -e 'ndkVersion' -e 'android.ndkVersion' || true)
+
+      - name: Normalize any 26.x to ${NDK_CAND} across Android project
         run: |
           set -e
           python3 - <<'PY'
@@ -107,39 +116,70 @@ jobs:
           app_dir = os.environ.get('APP_DIR','.') or '.'
           ndk = os.environ.get('NDK_CAND','27.0.12077973')
 
-          def rw(path, fn):
-            if not os.path.isfile(path): return
-            with io.open(path,'r',encoding='utf-8') as f: s=f.read()
-            ns = fn(s)
-            if ns != s:
-              with io.open(path,'w',encoding='utf-8') as f: f.write(ns)
-              print(f'[patched] {path}')
-            else:
-              print(f'[ok] {path}')
+          def read(p): 
+              with io.open(p,'r',encoding='utf-8') as f: return f.read()
+          def write(p,s):
+              os.makedirs(os.path.dirname(p), exist_ok=True)
+              with io.open(p,'w',encoding='utf-8') as f: f.write(s)
+          def patch_file(path):
+              if not os.path.isfile(path): return False
+              s0 = read(path)
+              s = s0
+
+              # 1) Propiedad android.ndkVersion (varias formas)
+              s = re.sub(r'(["\'])android\.ndkVersion\1\s*[:=]\s*(["\'])[0-9\.]+(["\'])',
+                         lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s)
+              s = re.sub(r'extra\[\s*(["\'])android\.ndkVersion\1\s*\]\s*=\s*(["\'])[0-9\.]+(["\'])',
+                         lambda m: f'extra["android.ndkVersion"] = "{ndk}"', s)
+              s = re.sub(r'setProperty\(\s*(["\'])android\.ndkVersion\1\s*,\s*(["\'])[0-9\.]+(["\'])\s*\)',
+                         lambda m: f'setProperty("android.ndkVersion", "{ndk}")', s)
+              # catálogos (libs.versions.toml)
+              s = re.sub(r'(?i)^\s*ndk(?:Version)?\s*=\s*"(?:26\.[^"]+)"', f'ndkVersion = "{ndk}"', s, flags=re.M)
+
+              # 2) DSL del módulo: ndkVersion "..."
+              s = re.sub(r'ndkVersion\s*=\s*"(?:\d|\.)+"', f'ndkVersion = "{ndk}"', s)
+              s = re.sub(r"ndkVersion\s*'(?:\d|\.)+'",     f"ndkVersion '{ndk}'", s)
+
+              # 3) Valores literales 26.x que aparezcan (último recurso)
+              s = re.sub(r'"26\.[0-9\.]*"', f'"{ndk}"', s)
+              s = re.sub(r"'26\.[0-9\.]*'", f"'{ndk}'", s)
+
+              if s != s0:
+                  write(path, s)
+                  print(f"[patched] {path}")
+                  return True
+              else:
+                  print(f"[ok] {path}")
+                  return False
 
           # gradle.properties (android/)
           props = os.path.join(app_dir,'android','gradle.properties')
-          os.makedirs(os.path.dirname(props), exist_ok=True)
           lines=[]
           if os.path.exists(props):
-            with io.open(props,'r',encoding='utf-8') as f: lines=f.read().splitlines()
+              with io.open(props,'r',encoding='utf-8') as f: lines=f.read().splitlines()
           lines=[ln for ln in lines if not ln.strip().startswith('android.ndkVersion=')]
           lines.append(f'android.ndkVersion={ndk}')
-          with io.open(props,'w',encoding='utf-8') as f: f.write('\n'.join(lines)+'\n')
+          write(props, '\n'.join(lines)+'\n')
           print(f'[set] android.ndkVersion={ndk} in android/gradle.properties')
 
-          # nivel proyecto
-          for p in ['android/build.gradle.kts','android/build.gradle']:
-            rw(os.path.join(app_dir,p), lambda s:
-              re.sub(r'(["\'])android\.ndkVersion\\1\\s*[:=]\\s*(["\'])[0-9\\.]+(["\'])',
-                     lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s))
-
-          # módulo app
-          for p in ['android/app/build.gradle.kts','android/app/build.gradle']:
-            rw(os.path.join(app_dir,p), lambda s:
-              re.sub(r'(ndkVersion\\s*=\\s*")[^"]+(")', r'\\1'+ndk+r'\\2',
-              re.sub(r"(ndkVersion\\s*')([^']+)(')", r"\\1"+ndk+r"\\3", s)))
+          # Archivos a inspeccionar/parchar
+          candidates = [
+            'android/build.gradle.kts', 'android/build.gradle',
+            'android/app/build.gradle.kts', 'android/app/build.gradle',
+            'android/gradle/libs.versions.toml', 'android/gradle/libs.versions.versions.toml',
+          ]
+          for rel in candidates:
+              patch_file(os.path.join(app_dir, rel))
           PY
+
+      - name: Debug current NDK mentions (after patch)
+        run: |
+          set -e
+          cd "$APP_DIR/android"
+          echo ">>> Grep ndkVersion / android.ndkVersion (after)"
+          (grep -Rns --include='*.gradle*' --include='*.kts' --include='*.toml' -e 'ndkVersion' -e 'android.ndkVersion' || true)
+          echo ">>> Show first 30 lines of build.gradle.kts"
+          nl -ba build.gradle.kts | sed -n '1,30p' || true
 
       - name: Flutter pub get
         run: |
