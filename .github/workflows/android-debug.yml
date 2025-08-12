@@ -83,10 +83,10 @@ jobs:
           mkdir -p "$APP_DIR/android"
           touch "$LP"
           # limpia claves previas y escribe valores correctos
-          { grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
-          mv "$LP.tmp" "$LP"
-          echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
-          echo "flutter.ndkVersion=$CANDIDATE" >> "$LP"
+          grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" > "$LP.tmp" 2>/dev/null || true
+          mv "$LP.tmp" "$LP" 2>/dev/null || true
+          printf "ndk.dir=%s/ndk/%s\n" "$ANDROID_SDK_ROOT" "$CANDIDATE" >> "$LP"
+          printf "flutter.ndkVersion=%s\n" "$CANDIDATE" >> "$LP"
           echo "--- local.properties ---"
           cat "$LP"
 
@@ -94,14 +94,16 @@ jobs:
         run: |
           set -e
           APP_DIR="${APP_DIR:-.}"
-          cat > "$APP_DIR/android/gradle.properties" <<EOF
-org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8
-android.useAndroidX=true
-android.enableJetifier=true
-android.ndkVersion=${NDK_CAND}
-EOF
+          GP="$APP_DIR/android/gradle.properties"
+          mkdir -p "$APP_DIR/android"
+          {
+            echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8"
+            echo "android.useAndroidX=true"
+            echo "android.enableJetifier=true"
+            echo "android.ndkVersion=${NDK_CAND}"
+          } > "$GP"
           echo "=== android/gradle.properties ==="
-          cat "$APP_DIR/android/gradle.properties"
+          cat "$GP"
 
       - name: Fresh Gradle home (isolate & clean)
         run: |
@@ -110,17 +112,20 @@ EOF
           mkdir -p "$GH"
           echo "GRADLE_USER_HOME=$GH" >> "$GITHUB_ENV"
           unset GRADLE_OPTS
-          cat > "$GH/gradle.properties" <<'EOF'
-org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8
-EOF
+          {
+            echo "org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8"
+          } > "$GH/gradle.properties"
           echo "=== $GH/gradle.properties ==="
           cat "$GH/gradle.properties"
 
       - name: Stop any Gradle daemons (ensure fresh)
         run: |
           set -e
-          cd "$APP_DIR/android"
-          ./gradlew --stop || true
+          if [ -f "$APP_DIR/android/gradlew" ]; then
+            (cd "$APP_DIR/android" && ./gradlew --stop) || true
+          else
+            echo "No gradlew yet, skipping --stop"
+          fi
 
       - name: Flutter pub get
         run: |
