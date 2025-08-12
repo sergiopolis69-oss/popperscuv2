@@ -126,48 +126,19 @@ jobs:
                                     lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s))))
           PY
 
-      - name: Sanitize Gradle properties (project + user)
+      - name: Reset Gradle properties (project-only, safe)
         run: |
           set -e
-          python3 - <<'PY'
-          import os, io, re
-          ndk = os.environ.get('NDK_CAND','27.0.12077973')
-          files = []
-          app_dir = os.environ.get('APP_DIR','.') or '.'
-          files.append(os.path.join(app_dir,'android','gradle.properties'))
-          files.append(os.path.expanduser('~/.gradle/gradle.properties'))
-          for path in files:
-              if not os.path.isfile(path): continue
-              with io.open(path,'r',encoding='utf-8') as f:
-                  s = f.read().replace('\r\n','\n').replace('\r','\n')
-              lines = s.split('\n')
-              jvm = None
-              others = []
-              for ln in lines:
-                  if ln.startswith('org.gradle.jvmargs='):
-                      jvm = ln[len('org.gradle.jvmargs='):]
-                  elif ln.strip():
-                      others.append(ln)
-              if jvm is not None:
-                  toks = jvm.strip().split()
-                  keep = [t for t in toks if t.startswith('-X') or t.startswith('-D') or t.startswith('--add-')]
-                  # descarta props mal pegadas dentro de jvmargs
-                  jvm_line = 'org.gradle.jvmargs=' + ' '.join(keep) if keep else 'org.gradle.jvmargs=-Xmx4G'
-              else:
-                  jvm_line = 'org.gradle.jvmargs=-Xmx4G'
-              # asegura props en líneas propias
-              def ensure_prop(arr, key, val):
-                  arr[:] = [x for x in arr if not x.startswith(key+'=')]
-                  arr.append(f'{key}={val}')
-              ensure_prop(others, 'android.useAndroidX', 'true')
-              ensure_prop(others, 'android.enableJetifier', 'true')
-              ensure_prop(others, 'android.ndkVersion', ndk)
-              out = jvm_line + '\n' + '\n'.join([x for x in others if x.strip()]) + '\n'
-              with io.open(path,'w',encoding='utf-8') as f:
-                  f.write(out)
-              print(f'[sanitized] {path}')
-              print(out)
-          PY
+          APP_DIR="${APP_DIR:-.}"
+          # Reescribe gradle.properties con líneas separadas y NDK sincronizado
+          cat > "$APP_DIR/android/gradle.properties" <<EOF
+org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.enableJetifier=true
+android.ndkVersion=${NDK_CAND}
+EOF
+          echo "=== android/gradle.properties ==="
+          cat "$APP_DIR/android/gradle.properties"
 
       - name: Debug NDK mentions (after patch)
         run: |
