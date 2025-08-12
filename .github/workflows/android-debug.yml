@@ -1,4 +1,4 @@
-name: Android Debug APK (NDK27 clean)
+name: Android Debug APK (NDK27 + V2 embedding)
 
 on:
   workflow_dispatch:
@@ -62,7 +62,7 @@ jobs:
           echo "Installed NDKs:"
           ls -la "$ANDROID_SDK_ROOT/ndk" || true
 
-      - name: Resolve NDK 27.x and write local.properties (ndk.dir + flutter.ndkVersion)
+      - name: Resolve NDK 27.x and write local.properties
         run: |
           set -e
           APP_DIR="${APP_DIR:-.}"
@@ -83,8 +83,8 @@ jobs:
           mkdir -p "$APP_DIR/android"
           touch "$LP"
           # limpia claves previas y escribe valores correctos
-          grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" > "$LP.tmp" 2>/dev/null || true
-          mv "$LP.tmp" "$LP" 2>/dev/null || true
+          { grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
+          mv "$LP.tmp" "$LP"
           printf "ndk.dir=%s/ndk/%s\n" "$ANDROID_SDK_ROOT" "$CANDIDATE" >> "$LP"
           printf "flutter.ndkVersion=%s\n" "$CANDIDATE" >> "$LP"
           echo "--- local.properties ---"
@@ -118,13 +118,63 @@ jobs:
           echo "=== $GH/gradle.properties ==="
           cat "$GH/gradle.properties"
 
-      - name: Stop any Gradle daemons (ensure fresh)
+      - name: Migrate to Android embedding v2 (patch MainActivity + Manifest)
+        run: |
+          set -e
+          APP_DIR="${APP_DIR:-.}"
+          BASE="$APP_DIR/android/app/src/main"
+          # 1) Parchea MainActivity (Kotlin o Java)
+          for SRC in "$BASE/kotlin" "$BASE/java"; do
+            [ -d "$SRC" ] || continue
+            FILE=$(grep -Rls --include='*.kt' --include='*.java' 'FlutterActivity' "$SRC" || true)
+            if [ -z "$FILE" ]; then
+              FILE=$(grep -Rls --include='*.kt' --include='*.java' 'io.flutter.app.FlutterActivity' "$SRC" || true)
+            fi
+            if [ -n "$FILE" ]; then
+              echo "Patching $FILE to V2 embedding..."
+              # Reemplaza import v1 por v2
+              sed -i 's#io\.flutter\.app\.FlutterActivity#io.flutter.embedding.android.FlutterActivity#g' "$FILE"
+              # Quita GeneratedPluginRegistrant si existe
+              sed -i '/GeneratedPluginRegistrant/d' "$FILE"
+              # Kotlin: elimina onCreate si solo llamaba a super + registrant
+              if echo "$FILE" | grep -q '\.kt$'; then
+                awk '
+                  BEGIN{skip=0}
+                  /override fun onCreate\(savedInstanceState: Bundle\)\s*\{/ {skip=1; print "// removed legacy onCreate"; next}
+                  skip==1 && /\}/ {skip=0; next}
+                  {print}
+                ' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE" || true
+              fi
+            fi
+          done
+          # 2) Asegura meta-data flutterEmbedding=2 en AndroidManifest
+          MAN="$BASE/AndroidManifest.xml"
+          if [ -f "$MAN" ]; then
+            if ! grep -q 'flutterEmbedding' "$MAN"; then
+              echo "Injecting <meta-data flutterEmbedding=2> into $MAN"
+              python3 - <<'PY'
+import io, os, re
+APP=os.environ.get('APP_DIR','.') or '.'
+man=os.path.join(APP,'android','app','src','main','AndroidManifest.xml')
+with io.open(man,'r',encoding='utf-8') as f:
+    s=f.read()
+# Inserta la meta-data antes de </application>
+if '</application>' in s and 'flutterEmbedding' not in s:
+    s=s.replace('</application>','    <meta-data android:name="flutterEmbedding" android:value="2"/>\n</application>')
+with io.open(man,'w',encoding='utf-8') as f:
+    f.write(s)
+print('Manifest patched:', man)
+PY
+            fi
+          else
+            echo "WARN: AndroidManifest not found at $MAN"
+          fi
+
+      - name: Stop any Gradle daemons (fresh start)
         run: |
           set -e
           if [ -f "$APP_DIR/android/gradlew" ]; then
             (cd "$APP_DIR/android" && ./gradlew --stop) || true
-          else
-            echo "No gradlew yet, skipping --stop"
           fi
 
       - name: Flutter pub get
