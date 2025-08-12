@@ -1,4 +1,4 @@
-name: Android Debug APK (NDK27 hardened)
+name: Android Debug APK (NDK27 synced)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "Detected APP_DIR=$APP_DIR"
 
-      # Instala cmdline-tools si sdkmanager no existe
+      # sdkmanager puede no existir: instalamos cmdline-tools
       - name: Ensure Android cmdline-tools (sdkmanager)
         run: |
           set -e
@@ -66,33 +66,34 @@ jobs:
           rm -rf android
           flutter create --platforms=android .
 
-      - name: Accept licenses & install NDK 27.0.12077973
+      - name: Accept licenses & ensure at least one NDK 27.x
         run: |
           set -e
           SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMAN" --licenses >/dev/null
-          yes | "$SDKMAN" --install "ndk;27.0.12077973"
+          # instalamos una 27 conocida; luego elegimos la 27.x más alta disponible
+          yes | "$SDKMAN" --install "ndk;27.0.12077973" || true
           echo "Installed NDKs:"
           ls -la "$ANDROID_SDK_ROOT/ndk" || true
 
-      - name: Resolve installed NDK 27.x and write ndk.dir
+      - name: Resolve NDK 27.x and export NDK_CAND
         run: |
           set -e
-          APP_DIR="${APP_DIR:-.}"
           NDK_ROOT="$ANDROID_SDK_ROOT/ndk"
-          echo "SDK root: $ANDROID_SDK_ROOT"
-          ls -la "$NDK_ROOT" || true
           CANDIDATE=""
           if [ -d "$NDK_ROOT" ]; then
             CANDIDATE=$(ls -1 "$NDK_ROOT" | grep '^27' | sort -V | tail -n1 || true)
           fi
           if [ -z "$CANDIDATE" ] || [ ! -f "$NDK_ROOT/$CANDIDATE/source.properties" ]; then
-            echo "No valid NDK 27 found. Installing exact 27.0.12077973..."
+            echo "No valid 27.x found; trying to (re)install 27.0.12077973..."
             SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
             yes | "$SDKMAN" --install "ndk;27.0.12077973"
             CANDIDATE="27.0.12077973"
           fi
           echo "Using NDK: $NDK_ROOT/$CANDIDATE"
+          echo "NDK_CAND=$CANDIDATE" >> "$GITHUB_ENV"
+          # Escribimos ndk.dir exacto
+          APP_DIR="${APP_DIR:-.}"
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
           touch "$LP"
@@ -102,40 +103,46 @@ jobs:
           echo "--- local.properties ---"
           cat "$LP"
 
-      - name: Inject ndkVersion into Gradle files
+      - name: Sync android.ndkVersion and Gradle ndkVersion to ${NDK_CAND}
         run: |
           set -e
           python3 - <<'PY'
           import io, os, re
           app_dir = os.environ.get('APP_DIR','.') or '.'
+          ndk = os.environ.get('NDK_CAND','27.0.12077973')
+
+          # 1) gradle.properties: android.ndkVersion=<ndk>
+          props = os.path.join(app_dir,'android','gradle.properties')
+          os.makedirs(os.path.dirname(props), exist_ok=True)
+          lines = []
+          if os.path.exists(props):
+            with io.open(props,'r',encoding='utf-8') as f:
+              lines = f.read().splitlines()
+          # elimina entradas previas android.ndkVersion
+          lines = [ln for ln in lines if not ln.startswith('android.ndkVersion=')]
+          lines.append(f'android.ndkVersion={ndk}')
+          with io.open(props,'w',encoding='utf-8') as f:
+            f.write('\n'.join(lines)+'\n')
+          print(f'Wrote android.ndkVersion={ndk} to gradle.properties')
+
+          # 2) build.gradle(.kts): ndkVersion = "<ndk>"  ó  ndkVersion '<ndk>'
           for path in [os.path.join(app_dir,'android','app','build.gradle.kts'),
                        os.path.join(app_dir,'android','app','build.gradle')]:
-              if os.path.isfile(path):
-                  with io.open(path,'r',encoding='utf-8') as f:
-                      s=f.read()
-                  if 'ndkVersion' not in s:
-                      if path.endswith('.kts'):
-                          s=re.sub(r'(android\s*\{)', r'\1\n    ndkVersion = "27.0.12077973"', s, count=1)
-                      else:
-                          s=re.sub(r'(android\s*\{)', r"\1\n    ndkVersion '27.0.12077973'", s, count=1)
-                      with io.open(path,'w',encoding='utf-8') as f:
-                          f.write(s)
-                      print(f'Injected ndkVersion into {path}')
-                  else:
-                      print(f'ndkVersion already present in {path}')
-          props=os.path.join(app_dir,'android','gradle.properties')
-          os.makedirs(os.path.dirname(props), exist_ok=True)
-          lines=[]
-          if os.path.exists(props):
-              with io.open(props,'r',encoding='utf-8') as f:
-                  lines=f.read().splitlines()
-          if not any(line.startswith('android.ndkVersion=') for line in lines):
-              lines.append('android.ndkVersion=27.0.12077973')
-              with io.open(props,'w',encoding='utf-8') as f:
-                  f.write('\n'.join(lines)+'\n')
-              print('Added android.ndkVersion to gradle.properties')
-          else:
-              print('gradle.properties already has android.ndkVersion')
+            if not os.path.isfile(path): continue
+            with io.open(path,'r',encoding='utf-8') as f:
+              s = f.read()
+            # reemplaza si ya existe
+            s2 = re.sub(r'ndkVersion\s*=\s*"[0-9\.\-]+"' , f'ndkVersion = "{ndk}"', s)
+            s2 = re.sub(r"ndkVersion\s*'[^']+'",           f"ndkVersion '{ndk}'", s2)
+            if s2 == s:
+              # insertar si no existe
+              if path.endswith('.kts'):
+                s2 = re.sub(r'(android\s*\{)', r'\1\n    ndkVersion = "'+ndk+'"', s, count=1)
+              else:
+                s2 = re.sub(r'(android\s*\{)', r"\1\n    ndkVersion '"+ndk+"'", s, count=1)
+            with io.open(path,'w',encoding='utf-8') as f:
+              f.write(s2)
+            print(f'Synced ndkVersion in {path} -> {ndk}')
           PY
 
       - name: Flutter pub get
