@@ -1,4 +1,4 @@
-name: Android Debug APK (NDK27 synced)
+name: Android Debug APK (NDK27 synced + props sanitized)
 
 on:
   workflow_dispatch:
@@ -7,14 +7,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java 17 (AGP compatible)
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
@@ -81,7 +84,6 @@ jobs:
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
           touch "$LP"
-          # quita líneas previas y escribe ambas claves
           { grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
           mv "$LP.tmp" "$LP"
           echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
@@ -113,7 +115,7 @@ jobs:
           os.makedirs(os.path.dirname(props), exist_ok=True)
           with io.open(props,'w',encoding='utf-8') as f: f.write('\\n'.join(lines)+'\\n')
           print(f'[set] android.ndkVersion={ndk} in android/gradle.properties')
-          # nivel proyecto + módulo app
+          # nivel proyecto + módulo app (+ catálogos)
           for rel in ['android/build.gradle.kts','android/build.gradle',
                       'android/app/build.gradle.kts','android/app/build.gradle',
                       'android/gradle/libs.versions.toml']:
@@ -124,14 +126,61 @@ jobs:
                                     lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s))))
           PY
 
+      - name: Sanitize Gradle properties (project + user)
+        run: |
+          set -e
+          python3 - <<'PY'
+          import os, io, re
+          ndk = os.environ.get('NDK_CAND','27.0.12077973')
+          files = []
+          app_dir = os.environ.get('APP_DIR','.') or '.'
+          files.append(os.path.join(app_dir,'android','gradle.properties'))
+          files.append(os.path.expanduser('~/.gradle/gradle.properties'))
+          for path in files:
+              if not os.path.isfile(path): continue
+              with io.open(path,'r',encoding='utf-8') as f:
+                  s = f.read().replace('\r\n','\n').replace('\r','\n')
+              lines = s.split('\n')
+              jvm = None
+              others = []
+              for ln in lines:
+                  if ln.startswith('org.gradle.jvmargs='):
+                      jvm = ln[len('org.gradle.jvmargs='):]
+                  elif ln.strip():
+                      others.append(ln)
+              if jvm is not None:
+                  toks = jvm.strip().split()
+                  keep = [t for t in toks if t.startswith('-X') or t.startswith('-D') or t.startswith('--add-')]
+                  # descarta props mal pegadas dentro de jvmargs
+                  jvm_line = 'org.gradle.jvmargs=' + ' '.join(keep) if keep else 'org.gradle.jvmargs=-Xmx4G'
+              else:
+                  jvm_line = 'org.gradle.jvmargs=-Xmx4G'
+              # asegura props en líneas propias
+              def ensure_prop(arr, key, val):
+                  arr[:] = [x for x in arr if not x.startswith(key+'=')]
+                  arr.append(f'{key}={val}')
+              ensure_prop(others, 'android.useAndroidX', 'true')
+              ensure_prop(others, 'android.enableJetifier', 'true')
+              ensure_prop(others, 'android.ndkVersion', ndk)
+              out = jvm_line + '\n' + '\n'.join([x for x in others if x.strip()]) + '\n'
+              with io.open(path,'w',encoding='utf-8') as f:
+                  f.write(out)
+              print(f'[sanitized] {path}')
+              print(out)
+          PY
+
       - name: Debug NDK mentions (after patch)
         run: |
           set -e
           cd "$APP_DIR/android"
           echo ">>> ndk.dir + flutter.ndkVersion in local.properties"
           grep -nE '^(ndk\.dir|flutter\.ndkVersion)=' local.properties || true
-          echo ">>> Gradle files:"
+          echo ">>> Gradle files (grep):"
           (grep -Rns --include='*.gradle*' --include='*.kts' --include='*.toml' -e 'ndkVersion' -e 'android.ndkVersion' || true)
+          echo ">>> Show android/gradle.properties"
+          cat gradle.properties || true
+          echo ">>> Show ~/.gradle/gradle.properties"
+          cat "$HOME/.gradle/gradle.properties" || true
 
       - name: Flutter pub get
         run: |
@@ -146,7 +195,8 @@ jobs:
           echo "Building with android.ndkVersion=${ORG_GRADLE_PROJECT_android_ndkVersion}"
           flutter build apk --debug
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
           path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-debug.apk
