@@ -2,34 +2,24 @@ name: Android Debug APK (NDK27 synced)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - "**/*.dart"
-      - "pubspec.yaml"
-      - ".github/workflows/android-debug.yml"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 17 (AGP compatible)
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
       - name: Detect Flutter app directory
-        id: detect_dir
         run: |
           set -e
           APP_DIR="."
@@ -39,15 +29,12 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "Detected APP_DIR=$APP_DIR"
 
-      # sdkmanager puede no existir: instalamos cmdline-tools
       - name: Ensure Android cmdline-tools (sdkmanager)
         run: |
           set -e
           SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          echo "ANDROID_SDK_ROOT=$SDK"
           SDKMAN="$SDK/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMAN" ]; then
-            echo "Installing Android cmdline-tools (sdkmanager)..."
             mkdir -p "$SDK/cmdline-tools"
             cd "$SDK/cmdline-tools"
             curl -sSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip
@@ -74,7 +61,7 @@ jobs:
           yes | "$SDKMAN" --install "ndk;27.0.12077973" || true
           ls -la "$ANDROID_SDK_ROOT/ndk" || true
 
-      - name: Resolve NDK 27.x, write ndk.dir and export env
+      - name: Resolve NDK 27.x and write local.properties (ndk.dir + flutter.ndkVersion)
         run: |
           set -e
           APP_DIR="${APP_DIR:-.}"
@@ -90,96 +77,61 @@ jobs:
           fi
           echo "Using NDK: $NDK_ROOT/$CANDIDATE"
           echo "NDK_CAND=$CANDIDATE" >> "$GITHUB_ENV"
-          # fuerza ndk.dir
+
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
-          { grep -v '^ndk\.dir=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
-          mv "$LP.tmp" "$LP" 2>/dev/null || true
+          touch "$LP"
+          # quita líneas previas y escribe ambas claves
+          { grep -v -E '^(ndk\.dir|flutter\.ndkVersion)=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
+          mv "$LP.tmp" "$LP"
           echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
+          echo "flutter.ndkVersion=$CANDIDATE" >> "$LP"
           echo "--- local.properties ---"
           cat "$LP"
-          # env override (redundante pero seguro)
-          echo "ORG_GRADLE_PROJECT_android_ndkVersion=$CANDIDATE" >> "$GITHUB_ENV"
 
-      - name: Debug current NDK mentions (before patch)
-        run: |
-          set -e
-          cd "$APP_DIR/android"
-          echo ">>> Grep ndkVersion / android.ndkVersion (before)"
-          (grep -Rns --include='*.gradle*' --include='*.kts' --include='*.toml' -e 'ndkVersion' -e 'android.ndkVersion' || true)
-
-      - name: Normalize any 26.x to ${NDK_CAND} across Android project
+      - name: Normalize any 26.x to ${NDK_CAND} (Gradle files)
         run: |
           set -e
           python3 - <<'PY'
           import io, os, re
           app_dir = os.environ.get('APP_DIR','.') or '.'
           ndk = os.environ.get('NDK_CAND','27.0.12077973')
-
-          def read(p): 
-              with io.open(p,'r',encoding='utf-8') as f: return f.read()
-          def write(p,s):
-              os.makedirs(os.path.dirname(p), exist_ok=True)
-              with io.open(p,'w',encoding='utf-8') as f: f.write(s)
-          def patch_file(path):
-              if not os.path.isfile(path): return False
-              s0 = read(path)
-              s = s0
-
-              # 1) Propiedad android.ndkVersion (varias formas)
-              s = re.sub(r'(["\'])android\.ndkVersion\1\s*[:=]\s*(["\'])[0-9\.]+(["\'])',
-                         lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s)
-              s = re.sub(r'extra\[\s*(["\'])android\.ndkVersion\1\s*\]\s*=\s*(["\'])[0-9\.]+(["\'])',
-                         lambda m: f'extra["android.ndkVersion"] = "{ndk}"', s)
-              s = re.sub(r'setProperty\(\s*(["\'])android\.ndkVersion\1\s*,\s*(["\'])[0-9\.]+(["\'])\s*\)',
-                         lambda m: f'setProperty("android.ndkVersion", "{ndk}")', s)
-              # catálogos (libs.versions.toml)
-              s = re.sub(r'(?i)^\s*ndk(?:Version)?\s*=\s*"(?:26\.[^"]+)"', f'ndkVersion = "{ndk}"', s, flags=re.M)
-
-              # 2) DSL del módulo: ndkVersion "..."
-              s = re.sub(r'ndkVersion\s*=\s*"(?:\d|\.)+"', f'ndkVersion = "{ndk}"', s)
-              s = re.sub(r"ndkVersion\s*'(?:\d|\.)+'",     f"ndkVersion '{ndk}'", s)
-
-              # 3) Valores literales 26.x que aparezcan (último recurso)
-              s = re.sub(r'"26\.[0-9\.]*"', f'"{ndk}"', s)
-              s = re.sub(r"'26\.[0-9\.]*'", f"'{ndk}'", s)
-
-              if s != s0:
-                  write(path, s)
-                  print(f"[patched] {path}")
-                  return True
-              else:
-                  print(f"[ok] {path}")
-                  return False
-
-          # gradle.properties (android/)
+          def rw(path, fn):
+              if not os.path.isfile(path): return
+              with io.open(path,'r',encoding='utf-8') as f: s=f.read()
+              ns = fn(s)
+              if ns != s:
+                  with io.open(path,'w',encoding='utf-8') as f: f.write(ns)
+                  print(f'[patched] {path}')
+          # android/gradle.properties
           props = os.path.join(app_dir,'android','gradle.properties')
           lines=[]
           if os.path.exists(props):
               with io.open(props,'r',encoding='utf-8') as f: lines=f.read().splitlines()
           lines=[ln for ln in lines if not ln.strip().startswith('android.ndkVersion=')]
           lines.append(f'android.ndkVersion={ndk}')
-          write(props, '\n'.join(lines)+'\n')
+          os.makedirs(os.path.dirname(props), exist_ok=True)
+          with io.open(props,'w',encoding='utf-8') as f: f.write('\\n'.join(lines)+'\\n')
           print(f'[set] android.ndkVersion={ndk} in android/gradle.properties')
-
-          # Archivos a inspeccionar/parchar
-          candidates = [
-            'android/build.gradle.kts', 'android/build.gradle',
-            'android/app/build.gradle.kts', 'android/app/build.gradle',
-            'android/gradle/libs.versions.toml', 'android/gradle/libs.versions.versions.toml',
-          ]
-          for rel in candidates:
-              patch_file(os.path.join(app_dir, rel))
+          # nivel proyecto + módulo app
+          for rel in ['android/build.gradle.kts','android/build.gradle',
+                      'android/app/build.gradle.kts','android/app/build.gradle',
+                      'android/gradle/libs.versions.toml']:
+              p = os.path.join(app_dir, rel)
+              rw(p, lambda s: re.sub(r'(ndkVersion\\s*=\\s*")[^"]+(")', r'\\1'+ndk+r'\\2',
+                             re.sub(r"(ndkVersion\\s*')([^']+)(')", r"\\1"+ndk+r"\\3",
+                             re.sub(r'(["\\\'])android\\.ndkVersion\\1\\s*[:=]\\s*(["\\\'])[0-9\\.]+(["\\\'])',
+                                    lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s))))
           PY
 
-      - name: Debug current NDK mentions (after patch)
+      - name: Debug NDK mentions (after patch)
         run: |
           set -e
           cd "$APP_DIR/android"
-          echo ">>> Grep ndkVersion / android.ndkVersion (after)"
+          echo ">>> ndk.dir + flutter.ndkVersion in local.properties"
+          grep -nE '^(ndk\.dir|flutter\.ndkVersion)=' local.properties || true
+          echo ">>> Gradle files:"
           (grep -Rns --include='*.gradle*' --include='*.kts' --include='*.toml' -e 'ndkVersion' -e 'android.ndkVersion' || true)
-          echo ">>> Show first 30 lines of build.gradle.kts"
-          nl -ba build.gradle.kts | sed -n '1,30p' || true
 
       - name: Flutter pub get
         run: |
@@ -194,8 +146,7 @@ jobs:
           echo "Building with android.ndkVersion=${ORG_GRADLE_PROJECT_android_ndkVersion}"
           flutter build apk --debug
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
           path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-debug.apk
