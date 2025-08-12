@@ -140,6 +140,27 @@ EOF
           echo "=== android/gradle.properties ==="
           cat "$APP_DIR/android/gradle.properties"
 
+      - name: Fresh Gradle home (isolate & clean)
+        run: |
+          set -e
+          GH="$RUNNER_TEMP/.gradle"
+          mkdir -p "$GH"
+          echo "GRADLE_USER_HOME=$GH" >> "$GITHUB_ENV"
+          # Evita que el runner inyecte flags por env
+          unset GRADLE_OPTS
+          # gradle.properties limpio (solo jvmargs válidos)
+          cat > "$GH/gradle.properties" <<'EOF'
+org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=512m -Dfile.encoding=UTF-8
+EOF
+          echo "=== $GH/gradle.properties ==="
+          cat "$GH/gradle.properties"
+
+      - name: Stop any Gradle daemons (ensure fresh)
+        run: |
+          set -e
+          cd "$APP_DIR/android"
+          ./gradlew --stop || true
+
       - name: Debug NDK mentions (after patch)
         run: |
           set -e
@@ -161,6 +182,7 @@ EOF
       - name: Build debug APK
         env:
           ORG_GRADLE_PROJECT_android_ndkVersion: ${{ env.NDK_CAND }}
+          GRADLE_USER_HOME: ${{ env.GRADLE_USER_HOME }}
         run: |
           cd "$APP_DIR"
           echo "Building with android.ndkVersion=${ORG_GRADLE_PROJECT_android_ndkVersion}"
