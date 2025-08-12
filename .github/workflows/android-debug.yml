@@ -107,42 +107,56 @@ jobs:
         run: |
           set -e
           python3 - <<'PY'
-          import io, os, re
+          import io, os, re, sys
           app_dir = os.environ.get('APP_DIR','.') or '.'
           ndk = os.environ.get('NDK_CAND','27.0.12077973')
+          def read(p):
+              with io.open(p,'r',encoding='utf-8') as f: return f.read()
+          def write(p,s):
+              os.makedirs(os.path.dirname(p), exist_ok=True)
+              with io.open(p,'w',encoding='utf-8') as f: f.write(s)
 
-          # 1) gradle.properties: android.ndkVersion=<ndk>
+          # 1) android/gradle.properties -> android.ndkVersion=<ndk>
           props = os.path.join(app_dir,'android','gradle.properties')
-          os.makedirs(os.path.dirname(props), exist_ok=True)
-          lines = []
+          lines=[]
           if os.path.exists(props):
-            with io.open(props,'r',encoding='utf-8') as f:
-              lines = f.read().splitlines()
-          # elimina entradas previas android.ndkVersion
-          lines = [ln for ln in lines if not ln.startswith('android.ndkVersion=')]
+              lines = read(props).splitlines()
+          lines = [ln for ln in lines if not ln.strip().startswith('android.ndkVersion=')]
           lines.append(f'android.ndkVersion={ndk}')
-          with io.open(props,'w',encoding='utf-8') as f:
-            f.write('\n'.join(lines)+'\n')
-          print(f'Wrote android.ndkVersion={ndk} to gradle.properties')
+          write(props, '\n'.join(lines)+'\n')
+          print(f'[OK] gradle.properties -> android.ndkVersion={ndk}')
 
-          # 2) build.gradle(.kts): ndkVersion = "<ndk>"  ó  ndkVersion '<ndk>'
-          for path in [os.path.join(app_dir,'android','app','build.gradle.kts'),
-                       os.path.join(app_dir,'android','app','build.gradle')]:
-            if not os.path.isfile(path): continue
-            with io.open(path,'r',encoding='utf-8') as f:
-              s = f.read()
-            # reemplaza si ya existe
-            s2 = re.sub(r'ndkVersion\s*=\s*"[0-9\.\-]+"' , f'ndkVersion = "{ndk}"', s)
-            s2 = re.sub(r"ndkVersion\s*'[^']+'",           f"ndkVersion '{ndk}'", s2)
-            if s2 == s:
-              # insertar si no existe
-              if path.endswith('.kts'):
-                s2 = re.sub(r'(android\s*\{)', r'\1\n    ndkVersion = "'+ndk+'"', s, count=1)
+          # Helpers para reemplazos
+          def sync_file(path):
+              if not os.path.isfile(path): return
+              s = read(path)
+              original = s
+
+              # android.ndkVersion en nivel proyecto (build.gradle / .kts)
+              s = re.sub(r'(["\'])android\.ndkVersion\1\s*[:=]\s*(["\'])[0-9\.]+(["\'])',
+                         lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s)
+              s = re.sub(r'extra\[\s*(["\'])android\.ndkVersion\1\s*\]\s*=\s*(["\'])[0-9\.]+(["\'])',
+                         lambda m: f'extra["android.ndkVersion"] = "{ndk}"', s)
+              s = re.sub(r'setProperty\(\s*(["\'])android\.ndkVersion\1\s*,\s*(["\'])[0-9\.]+(["\'])\s*\)',
+                         lambda m: f'setProperty("android.ndkVersion", "{ndk}")', s)
+
+              # ndkVersion en módulo app (gradle .kts o groovy)
+              s = re.sub(r'ndkVersion\s*=\s*"(?:\d|\.)+"', f'ndkVersion = "{ndk}"', s)
+              s = re.sub(r"ndkVersion\s*'(?:\d|\.)+'",     f"ndkVersion '{ndk}'", s)
+
+              if s != original:
+                  write(path, s)
+                  print(f'[OK] Synced: {path}')
               else:
-                s2 = re.sub(r'(android\s*\{)', r"\1\n    ndkVersion '"+ndk+"'", s, count=1)
-            with io.open(path,'w',encoding='utf-8') as f:
-              f.write(s2)
-            print(f'Synced ndkVersion in {path} -> {ndk}')
+                  print(f'[OK] No changes needed: {path}')
+
+          # 2) Nivel proyecto
+          sync_file(os.path.join(app_dir,'android','build.gradle.kts'))
+          sync_file(os.path.join(app_dir,'android','build.gradle'))
+
+          # 3) Módulo app
+          sync_file(os.path.join(app_dir,'android','app','build.gradle.kts'))
+          sync_file(os.path.join(app_dir,'android','app','build.gradle'))
           PY
 
       - name: Flutter pub get
