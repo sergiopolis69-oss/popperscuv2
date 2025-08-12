@@ -48,44 +48,56 @@ jobs:
           rm -rf android
           flutter create --platforms=android .
 
-      - name: Force NDK 27 (safe Python injector)
+      - name: Inject ndkVersion into Gradle files
         shell: bash
         run: |
           set -e
-          python3 - <<'PY'
-          import io, os, re
-          app_dir = os.environ.get('APP_DIR','.') or '.'
-          for path in [os.path.join(app_dir,'android','app','build.gradle.kts'),
-                       os.path.join(app_dir,'android','app','build.gradle')]:
-              if os.path.isfile(path):
-                  with io.open(path,'r',encoding='utf-8') as f:
-                      s=f.read()
-                  if 'ndkVersion' not in s:
-                      if path.endswith('.kts'):
-                          s=re.sub(r'(android\s*\{)', r'\1\n    ndkVersion = "27.0.12077973"', s, count=1)
-                      else:
-                          s=re.sub(r'(android\s*\{)', r"\1\n    ndkVersion '27.0.12077973'", s, count=1)
-                      with io.open(path,'w',encoding='utf-8') as f:
-                          f.write(s)
-                      print(f'Injected ndkVersion into {path}')
-                  else:
-                      print(f'ndkVersion already present in {path}')
-          props=os.path.join(app_dir,'android','gradle.properties')
-          os.makedirs(os.path.dirname(props), exist_ok=True)
-          lines=[]
-          if os.path.exists(props):
-              with io.open(props,'r',encoding='utf-8') as f:
-                  lines=f.read().splitlines()
-          if not any(line.startswith('android.ndkVersion=') for line in lines):
-              lines.append('android.ndkVersion=27.0.12077973')
-              with io.open(props,'w',encoding='utf-8') as f:
-                  f.write('\n'.join(lines)+'\n')
-              print('Added android.ndkVersion to gradle.properties')
-          else:
-              print('gradle.properties already has android.ndkVersion')
-          PY
+          APP_DIR="${APP_DIR:-.}"
+          py=$(cat <<'PY'
+import io, os, re
+app_dir = os.environ.get('APP_DIR','.') or '.'
+for path in [os.path.join(app_dir,'android','app','build.gradle.kts'),
+             os.path.join(app_dir,'android','app','build.gradle')]:
+    if os.path.isfile(path):
+        with io.open(path,'r',encoding='utf-8') as f:
+            s=f.read()
+        if 'ndkVersion' not in s:
+            if path.endswith('.kts'):
+                s=re.sub(r'(android\s*\{)', r'\1\n    ndkVersion = "27.0.12077973"', s, count=1)
+            else:
+                s=re.sub(r'(android\s*\{)', r"\1\n    ndkVersion '27.0.12077973'", s, count=1)
+            with io.open(path,'w',encoding='utf-8') as f:
+                f.write(s)
+            print(f'Injected ndkVersion into {path}')
+        else:
+            print(f'ndkVersion already present in {path}')
+props=os.path.join(app_dir,'android','gradle.properties')
+os.makedirs(os.path.dirname(props), exist_ok=True)
+lines=[]
+if os.path.exists(props):
+    with io.open(props,'r',encoding='utf-8') as f:
+        lines=f.read().splitlines()
+if not any(line.startswith('android.ndkVersion=') for line in lines):
+    lines.append('android.ndkVersion=27.0.12077973')
+    with io.open(props,'w',encoding='utf-8') as f:
+        f.write('\n'.join(lines)+'\n')
+    print('Added android.ndkVersion to gradle.properties')
+else:
+    print('gradle.properties already has android.ndkVersion')
+PY
+)
+          python3 - <<PY
+${py}
+PY
 
-      - name: Install Android NDK 27 explicitly
+      - name: Install Android NDK 27 (exact) and accept licenses
+        shell: bash
+        run: |
+          set -e
+          yes | sdkmanager --licenses >/dev/null
+          yes | sdkmanager --install "ndk;27.0.12077973"
+          echo "Installed NDKs at:"
+          ls -la "$ANDROID_SDK_ROOT/ndk" || true
 
       - name: Resolve installed NDK 27.x and write ndk.dir
         shell: bash
@@ -100,48 +112,19 @@ jobs:
             CANDIDATE=$(ls -1 "$NDK_ROOT" | grep '^27' | sort -V | tail -n1 || true)
           fi
           if [ -z "$CANDIDATE" ] || [ ! -f "$NDK_ROOT/$CANDIDATE/source.properties" ]; then
-            echo "No valid NDK 27 found, installing exact 27.0.12077973..."
+            echo "No valid 27.x found after install, attempting again..."
             yes | sdkmanager --install "ndk;27.0.12077973"
             CANDIDATE="27.0.12077973"
           fi
           echo "Using NDK: $NDK_ROOT/$CANDIDATE"
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
+          touch "$LP"
           grep -v '^ndk\.dir=' "$LP" > "$LP.tmp" 2>/dev/null || true
           mv "$LP.tmp" "$LP" 2>/dev/null || true
           echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
+          echo "local.properties:"
           cat "$LP"
-        shell: bash
-        env:
-          SDKMANAGER: ${{ env.ANDROID_SDK_ROOT }}/cmdline-tools/latest/bin/sdkmanager
-        run: |
-          set -e
-          echo "SDK root: $ANDROID_SDK_ROOT"
-          if [ -x "$SDKMANAGER" ]; then
-            yes | "$SDKMANAGER" --licenses >/dev/null
-            yes | "$SDKMANAGER" --install "ndk;27.0.12077973"
-          else:
-            echo "Falling back to sdkmanager in PATH"
-            yes | sdkmanager --licenses >/dev/null
-            yes | sdkmanager --install "ndk;27.0.12077973"
-          fi
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
-          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
-          ls -la "$ANDROID_SDK_ROOT/ndk" || true
-
-      # removed explicit path writing; we will resolve the exact installed 27.x below
-        shell: bash
-        run: |
-          set -e
-          APP_DIR="${APP_DIR:-.}"
-          LP="$APP_DIR/android/local.properties"
-          mkdir -p "$APP_DIR/android"
-          touch "$LP"
-          grep -v '^ndk\.dir=' "$LP" > "$LP.tmp" || true
-          mv "$LP.tmp" "$LP"
-          echo "ndk.dir=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$LP"
-          echo "Wrote ndk.dir to local.properties -> $ANDROID_SDK_ROOT/ndk/27.0.12077973"
 
       - name: Flutter pub get
         shell: bash
