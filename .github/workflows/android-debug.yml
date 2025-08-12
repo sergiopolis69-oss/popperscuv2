@@ -39,7 +39,6 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "Detected APP_DIR=$APP_DIR"
 
-      # sdkmanager puede no existir: instalamos cmdline-tools
       - name: Ensure Android cmdline-tools (sdkmanager)
         run: |
           set -e
@@ -71,92 +70,75 @@ jobs:
           set -e
           SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMAN" --licenses >/dev/null
-          # instalamos una 27 conocida; luego elegimos la 27.x más alta disponible
           yes | "$SDKMAN" --install "ndk;27.0.12077973" || true
-          echo "Installed NDKs:"
           ls -la "$ANDROID_SDK_ROOT/ndk" || true
 
-      - name: Resolve NDK 27.x and export NDK_CAND
+      - name: Resolve NDK 27.x, write ndk.dir and export env
         run: |
           set -e
+          APP_DIR="${APP_DIR:-.}"
           NDK_ROOT="$ANDROID_SDK_ROOT/ndk"
           CANDIDATE=""
           if [ -d "$NDK_ROOT" ]; then
             CANDIDATE=$(ls -1 "$NDK_ROOT" | grep '^27' | sort -V | tail -n1 || true)
           fi
           if [ -z "$CANDIDATE" ] || [ ! -f "$NDK_ROOT/$CANDIDATE/source.properties" ]; then
-            echo "No valid 27.x found; trying to (re)install 27.0.12077973..."
             SDKMAN="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
             yes | "$SDKMAN" --install "ndk;27.0.12077973"
             CANDIDATE="27.0.12077973"
           fi
           echo "Using NDK: $NDK_ROOT/$CANDIDATE"
           echo "NDK_CAND=$CANDIDATE" >> "$GITHUB_ENV"
-          # Escribimos ndk.dir exacto
-          APP_DIR="${APP_DIR:-.}"
+          # fuerza ndk.dir
           LP="$APP_DIR/android/local.properties"
           mkdir -p "$APP_DIR/android"
-          touch "$LP"
-          grep -v '^ndk\.dir=' "$LP" > "$LP.tmp" 2>/dev/null || true
+          { grep -v '^ndk\.dir=' "$LP" 2>/dev/null || true; } > "$LP.tmp"
           mv "$LP.tmp" "$LP" 2>/dev/null || true
           echo "ndk.dir=$NDK_ROOT/$CANDIDATE" >> "$LP"
-          echo "--- local.properties ---"
           cat "$LP"
+          # fuerza propiedad Gradle via env (override garantizado)
+          echo "ORG_GRADLE_PROJECT_android_ndkVersion=$CANDIDATE" >> "$GITHUB_ENV"
 
-      - name: Sync android.ndkVersion and Gradle ndkVersion to ${NDK_CAND}
+      - name: Sync files to ${NDK_CAND}
         run: |
           set -e
           python3 - <<'PY'
-          import io, os, re, sys
+          import io, os, re
           app_dir = os.environ.get('APP_DIR','.') or '.'
           ndk = os.environ.get('NDK_CAND','27.0.12077973')
-          def read(p):
-              with io.open(p,'r',encoding='utf-8') as f: return f.read()
-          def write(p,s):
-              os.makedirs(os.path.dirname(p), exist_ok=True)
-              with io.open(p,'w',encoding='utf-8') as f: f.write(s)
 
-          # 1) android/gradle.properties -> android.ndkVersion=<ndk>
+          def rw(path, fn):
+            if not os.path.isfile(path): return
+            with io.open(path,'r',encoding='utf-8') as f: s=f.read()
+            ns = fn(s)
+            if ns != s:
+              with io.open(path,'w',encoding='utf-8') as f: f.write(ns)
+              print(f'[patched] {path}')
+            else:
+              print(f'[ok] {path}')
+
+          # gradle.properties (android/)
           props = os.path.join(app_dir,'android','gradle.properties')
+          os.makedirs(os.path.dirname(props), exist_ok=True)
           lines=[]
           if os.path.exists(props):
-              lines = read(props).splitlines()
-          lines = [ln for ln in lines if not ln.strip().startswith('android.ndkVersion=')]
+            with io.open(props,'r',encoding='utf-8') as f: lines=f.read().splitlines()
+          lines=[ln for ln in lines if not ln.strip().startswith('android.ndkVersion=')]
           lines.append(f'android.ndkVersion={ndk}')
-          write(props, '\n'.join(lines)+'\n')
-          print(f'[OK] gradle.properties -> android.ndkVersion={ndk}')
+          with io.open(props,'w',encoding='utf-8') as f: f.write('\n'.join(lines)+'\n')
+          print(f'[set] android.ndkVersion={ndk} in android/gradle.properties')
 
-          # Helpers para reemplazos
-          def sync_file(path):
-              if not os.path.isfile(path): return
-              s = read(path)
-              original = s
+          # nivel proyecto
+          for p in ['android/build.gradle.kts','android/build.gradle']:
+            rw(os.path.join(app_dir,p), lambda s:
+              re.sub(r'(["\'])android\.ndkVersion\\1\\s*[:=]\\s*(["\'])[0-9\\.]+(["\'])',
+                     lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s))
 
-              # android.ndkVersion en nivel proyecto (build.gradle / .kts)
-              s = re.sub(r'(["\'])android\.ndkVersion\1\s*[:=]\s*(["\'])[0-9\.]+(["\'])',
-                         lambda m: f'{m.group(1)}android.ndkVersion{m.group(1)} = "{ndk}"', s)
-              s = re.sub(r'extra\[\s*(["\'])android\.ndkVersion\1\s*\]\s*=\s*(["\'])[0-9\.]+(["\'])',
-                         lambda m: f'extra["android.ndkVersion"] = "{ndk}"', s)
-              s = re.sub(r'setProperty\(\s*(["\'])android\.ndkVersion\1\s*,\s*(["\'])[0-9\.]+(["\'])\s*\)',
-                         lambda m: f'setProperty("android.ndkVersion", "{ndk}")', s)
-
-              # ndkVersion en módulo app (gradle .kts o groovy)
-              s = re.sub(r'ndkVersion\s*=\s*"(?:\d|\.)+"', f'ndkVersion = "{ndk}"', s)
-              s = re.sub(r"ndkVersion\s*'(?:\d|\.)+'",     f"ndkVersion '{ndk}'", s)
-
-              if s != original:
-                  write(path, s)
-                  print(f'[OK] Synced: {path}')
-              else:
-                  print(f'[OK] No changes needed: {path}')
-
-          # 2) Nivel proyecto
-          sync_file(os.path.join(app_dir,'android','build.gradle.kts'))
-          sync_file(os.path.join(app_dir,'android','build.gradle'))
-
-          # 3) Módulo app
-          sync_file(os.path.join(app_dir,'android','app','build.gradle.kts'))
-          sync_file(os.path.join(app_dir,'android','app','build.gradle'))
+          # módulo app
+          for p in ['android/app/build.gradle.kts','android/app/build.gradle']:
+            rw(os.path.join(app_dir,p), lambda s:
+              re.sub(r'(ndkVersion\\s*=\\s*")[^"]+(")', r'\\1'+ndk+r'\\2',
+              re.sub(r"(ndkVersion\\s*')([^']+)(')", r"\\1"+ndk+r"\\3", s)))
           PY
 
       - name: Flutter pub get
@@ -165,8 +147,11 @@ jobs:
           flutter pub get
 
       - name: Build debug APK
+        env:
+          ORG_GRADLE_PROJECT_android_ndkVersion: ${{ env.NDK_CAND }}
         run: |
           cd "$APP_DIR"
+          echo "Building with android.ndkVersion=${ORG_GRADLE_PROJECT_android_ndkVersion}"
           flutter build apk --debug
 
       - name: Upload APK artifact
